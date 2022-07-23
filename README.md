@@ -11,6 +11,8 @@ func NewBucket(capacity, quantum int64, fillInterval time.Duration, options ...O
 
 NewBucket 返回一个新的令牌桶，每 fillInterval 个时间间隔，填充 quantum 个令牌的，直到给定的最大容量。桶初始化后就是满的
 
+`options` 可选 `WithClock()` 可以用其他时钟代替，方便 mock 测试
+
 - 获取一定数量的令牌
 
 ```go
