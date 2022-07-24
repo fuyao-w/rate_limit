@@ -16,25 +16,31 @@ package rate_limit
    limitations under the License.
 */
 import (
+	"errors"
 	"math"
 	"sync"
 	"time"
 )
 
+var (
+	ErrOverflow = errors.New("prohibit overflow")
+)
+
 // TokenBucket 令牌桶算法
 type TokenBucket struct {
-	clock           Clock         // 时钟 用户可以传入自定义的时钟用于mock测试
 	capacity        int64         // 桶容量
 	fillInterval    time.Duration // 填充间隔
 	quantum         int64         // 单次填充令牌数
 	availableTokens int64         // 当前可用的令牌数
 	createTime      time.Time     // 桶被创建的时间，用于计算间隔次数
 	lastTick        int64         // 最新的间隔次数，当需要等待的时候计算截止时间
-	mu              *sync.Mutex
+	*Options
+	mu *sync.Mutex
 }
 
 type Options struct {
-	clock Clock
+	clock            Clock // 时钟 用户可以传入自定义的时钟用于mock测试
+	prohibitOverflow bool
 }
 
 func NewBucket(capacity, quantum int64, fillInterval time.Duration, options ...OptionF) (bucket *TokenBucket) {
@@ -48,20 +54,16 @@ func NewBucket(capacity, quantum int64, fillInterval time.Duration, options ...O
 		panic("fill interval is not > 0")
 	}
 	opt := loadOptions(options...)
-	clock := new(standardClock)
 	bucket = &TokenBucket{
-		clock:           clock,
+		Options:         opt,
 		capacity:        capacity,
 		fillInterval:    fillInterval,
 		quantum:         quantum,
-		createTime:      clock.Now(),
+		createTime:      opt.clock.Now(),
 		mu:              new(sync.Mutex),
 		availableTokens: capacity,
 	}
 
-	if opt.clock != nil {
-		bucket.clock = opt.clock
-	}
 	return
 }
 
@@ -74,12 +76,23 @@ func loadOptions(options ...OptionF) (opt *Options) {
 	for _, f := range options {
 		f(opt)
 	}
+	if opt.clock == nil {
+		opt.clock = new(standardClock)
+	}
+
 	return
 }
 
 func WithClock(clock Clock) OptionF {
 	return func(opt *Options) {
 		opt.clock = clock
+	}
+}
+
+// WithProhibitOverflow 禁止溢出，此时不允许获取超过容量的令牌，退化成漏桶算法
+func WithProhibitOverflow() OptionF {
+	return func(opt *Options) {
+		opt.prohibitOverflow = true
 	}
 }
 
@@ -105,15 +118,21 @@ func (b *TokenBucket) doWithLock(f func() time.Duration) {
 }
 
 // Take 获取一定数量的令牌，如果当前桶中令牌数量不够，则阻塞直到获取成功
-func (b *TokenBucket) Take(count int64) {
-	b.doWithLock(func() (waitTime time.Duration) {
-		waitTime, _ = b.take(count, b.now(), infinityDuration)
-		return waitTime
+// 如果不使用 prohibitOverflow 选项， err 永远返回 nil
+// 如果使用 prohibitOverflow 选项，则获取超过容量的令牌数则会返回 ErrProhibitOverflow
+func (b *TokenBucket) Take(count int64) (err error) {
+	b.doWithLock(func() time.Duration {
+		if waitTime, succ := b.take(count, b.now(), infinityDuration); succ {
+			return waitTime
+		}
+		err = ErrOverflow
+		return 0
 	})
 	return
 }
 
 // TakeAvailable 尝试获取 count 个令牌，如果桶中令牌不够也不会阻塞，返回值告诉调用方实际上获取了多少个令牌
+// realCount 不会大于容量
 func (b *TokenBucket) TakeAvailable(count int64) (realCount int64) {
 	b.doWithLock(func() time.Duration {
 		realCount = b.takeAvailable(b.now(), count)
@@ -127,8 +146,8 @@ func (b *TokenBucket) takeAvailable(now time.Time, count int64) (realCount int64
 	if count <= 0 {
 		return
 	}
-
 	b.adjustAvailableTokens(b.currentTick(now))
+
 	if b.availableTokens < count {
 		realCount = b.availableTokens
 		b.availableTokens = 0
@@ -139,6 +158,7 @@ func (b *TokenBucket) takeAvailable(now time.Time, count int64) (realCount int64
 }
 
 // TryTake 从桶中获取一定数量的令牌，如果桶中令牌数充足则立即返回 true,或者桶中令牌数不够但是预计等待时间 <= maxWait 则阻塞到实际等待时间后并返回 true ,否则返回 false
+// 如果使用 prohibitOverflow 选项并且count超过了capacity 则永远返回false
 func (b *TokenBucket) TryTake(count int64, maxWait time.Duration) (succ bool) {
 	b.doWithLock(func() (waitTime time.Duration) {
 		waitTime, succ = b.take(count, b.now(), maxWait)
@@ -182,7 +202,10 @@ func (b *TokenBucket) adjustAvailableTokens(tick int64) {
 // 注意，如果 succ 返回 true 则代表已经从桶中取出了一些令牌，不会再放回桶中
 func (b *TokenBucket) take(count int64, now time.Time, maxWait time.Duration) (waiTime time.Duration, succ bool) {
 	if count <= 0 {
-		return
+		return 0, true
+	}
+	if b.prohibitOverflow && count > b.capacity {
+		return 0, false
 	}
 	// 先根据当前 tick 数量计算出最新的可用令牌数
 	tick := b.currentTick(now)
