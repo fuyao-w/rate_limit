@@ -190,3 +190,17 @@ func TestTake(t *testing.T) {
 	w, succ = buc.take(100, mClock.Now(), -1*time.Second)
 	t.Log(w, succ)
 }
+
+func TestOverflow(t *testing.T) {
+	//mClock := new(mockClock)
+	//mClock.initTime()
+
+	interval := time.Second
+	buc := NewBucket(100, 100, interval, WithProhibitOverflow())
+	//for i := 0; i < 3; i++ {
+	//	t.Log(buc.Take(100))
+	//}
+
+	//t.Log(buc.TakeAvailable(200))
+	t.Log(buc.TryTake(200, infinityDuration))
+}
