@@ -91,7 +91,7 @@ func TestWait(t *testing.T) {
 	t.Log(bucket.TryTake(10, 11*interval))
 }
 
-func clear(b *Bucket) {
+func clear(b *TokenBucket) {
 	b.availableTokens = 0
 	b.lastTick = 0
 }

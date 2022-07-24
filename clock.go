@@ -1,5 +1,7 @@
 package rate_limit
 
+import "time"
+
 /*
 	Copyright [2022] [wangfuyao]
 
@@ -15,13 +17,20 @@ package rate_limit
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-import (
-	"time"
-)
 
-type RateLimit interface {
-	Available() (available int64)
-	Take(count int64)
-	TakeAvailable(count int64) (realCount int64)
-	TryTake(count int64, maxWait time.Duration) (succ bool)
+// Clock 时钟 用户可以传入自定义的时钟用于mock测试
+type Clock interface {
+	Now() time.Time
+	Sleep(duration time.Duration)
+}
+
+// standardClock 普通的时钟实现
+type standardClock struct{}
+
+func (s *standardClock) Now() time.Time {
+	return time.Now()
+}
+
+func (s *standardClock) Sleep(duration time.Duration) {
+	time.Sleep(duration)
 }
