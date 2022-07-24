@@ -21,7 +21,7 @@ import (
 
 type RateLimit interface {
 	Available() (available int64)
-	Take(count int64)
+	Take(count int64) error
 	TakeAvailable(count int64) (realCount int64)
 	TryTake(count int64, maxWait time.Duration) (succ bool)
 }
